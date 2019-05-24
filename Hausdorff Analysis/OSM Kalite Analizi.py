@@ -2,40 +2,32 @@ import numpy as np
 import math
 import arcpy
 import os
-from arcpy import env
-from time import strftime
+arcpy.env.overwriteOutput = True
 # ------------------------------------------------------------------------------------------------
-Input2 = arcpy.GetParameterAsText(0)
-Input1 = arcpy.GetParameterAsText(1)
-directory = arcpy.GetParameterAsText(2) # Projenin olduğu dosya
+Input1 = arcpy.GetParameterAsText(0)
+Input2 = arcpy.GetParameterAsText(1)
+directory = arcpy.GetParameterAsText(2)
 Choice = arcpy.GetParameterAsText(3)
+Threshold = arcpy.GetParameterAsText(4)
+dsc_topovt = arcpy.Describe(Input1)
+coord_sys_topovt = dsc_topovt.spatialReference
 # ------------------------------------------------------------------------------------------------
-field = "hausdorff" # Hausdorff Uzaklıklarının Olduğu Sütun
+field = "hausdorff"  # Hausdorff distance field
 field2 = "TOPODETAYA"
 field3 = "name"
-new_shapefile = "Hausdorff_Analysis.shp" # Kesişen poligonların veri seti
-new_shapefile2 ="Non_Overlaps.shp"
+new_shapefile = "Hausdorff_Analysis.shp"  # Overlapping features
+new_shapefile2 = "Non_Overlaps.shp"
+new_shapefile3 = "KUCUKBINA_Analysis.shp"
+new_shapefile4 = "KUCUKBINA_Non_Overlaps.shp"
 field_type = "Double"
 field_type2 = "String"
 feature_type = "POLYGON"
 overlapping_features = os.path.join(directory,new_shapefile) # Veri setinin dosya Konumu
 Non_Overlap = os.path.join(directory,new_shapefile2)
+KUCUKBINA = os.path.join(directory,new_shapefile3)
+KUCUKBINA_Non_Overlaps = os.path.join(directory,new_shapefile4)
 # ------------------------------------------------------------------------------------------------
-# Test to see if the output feature class already exists
-if arcpy.Exists(overlapping_features):
-   # Delete it if it does
-   arcpy.Delete_management(overlapping_features)
-if arcpy.Exists(Non_Overlap):
-    arcpy.Delete_management(Non_Overlap)
-# ------------------------------------------------------------------------------------------------
-arcpy.CreateFeatureclass_management(directory, new_shapefile, feature_type) # Yeni layer oluşturur
-arcpy.CreateFeatureclass_management(directory, new_shapefile2, feature_type)
-arcpy.AddField_management(overlapping_features, field, field_type) # Öznitelik tablosuna yeni sütun ekler
-arcpy.AddField_management(overlapping_features, field2, field_type2)
-arcpy.AddField_management(overlapping_features, field3, field_type2)
-arcpy.AddField_management(Non_Overlap, field3, field_type2)
-# ------------------------------------------------------------------------------------------------
-# Hausdorff uzaklığını hesaplar
+# Calculates Hausdorff distance
 def Hausdorff_dist(poly_a,poly_b):
     dist_lst = []
     for i in range(len(poly_a)):
@@ -48,148 +40,215 @@ def Hausdorff_dist(poly_a,poly_b):
     hausdorff = np.max(dist_lst)
     return hausdorff
 # ------------------------------------------------------------------------------------------------
-# Köşe noktalarını hesaplar
+# Gets vertices
 def polygon_vertices(p1):
     for points1 in p1:
         return points1
 # ------------------------------------------------------------------------------------------------
 # Poligonu veri setine ekler
-def insert_cursor(base_polygon,insert_polygon):
+def insert_cursor(base_polygon,polygon):
     cursor = arcpy.da.InsertCursor(base_polygon, ['SHAPE@'])
-    cursor.insertRow([insert_polygon])
+    for i in polygon:
+        cursor.insertRow([i])
 # ------------------------------------------------------------------------------------------------
 # Listedeki hausdorff uzaklıklarını öznitelik tablosuna ekler
 def update_cursor(base_polygon,polygon_field,list):
     pointer = 0
-    with arcpy.da.UpdateCursor(base_polygon, polygon_field) as cursor4:
-        for a in cursor4:
+    with arcpy.da.UpdateCursor(base_polygon, polygon_field) as cursor:
+        for a in cursor:
             a[0] = list[pointer]
             pointer += 1
-            cursor4.updateRow(a)
+            cursor.updateRow(a)
+# ------------------------------------------------------------------------------------------------
+def KUCUKBINA_Analysis(Input1,Input2,Threshold):
+    fields_OSM = ["OID@", "SHAPE@",  "name","SHAPE@TRUECENTROID"]
+    cursor_osm = [ cursor for cursor in arcpy.da.SearchCursor(Input2, fields_OSM)]
+    fields_reference = ["OID@", "SHAPE@", "TOPODETAYA","SHAPE@TRUECENTROID"]
+    cursor_topovt = [cursor for cursor in arcpy.da.SearchCursor(Input1,fields_reference )]
+    errors = 0
+    # ----------------------------------------------------------
+    poly_list = []
+    Point_TOPODETAY = []
+    Point_TOPODETAY2 = []
+    Point_name = []
+    Point_name2 = []
+    for topovt in cursor_topovt:
+        try:
+            poly_list2 = []
+            count = 0
+            Matching = False
+            point = arcpy.Point(topovt[3][0], topovt[3][1])
+            for osm in cursor_osm:
+                dist = math.sqrt((topovt[3][0] - osm[3][0]) ** 2 + (topovt[3][1] - osm[3][1]) ** 2)
+                if dist < int(Threshold):
+                    if osm[1].contains(point):
+                        Matching = True
+                        Point_TOPODETAY2 = topovt[2]
+                        Point_name2 = osm[2]
+                        poly_list2 = osm[1]
+                        count = count+1
+                        cursor_osm.remove(osm)
+            if Matching is True:
+                if count == 1:
+                    Point_TOPODETAY.append(Point_TOPODETAY2)
+                    poly_list.append(poly_list2)
+                    Point_name.append(Point_name2)
+        except:
+            errors = +1
+    insert_cursor(KUCUKBINA, poly_list)
+    update_cursor(KUCUKBINA, field2, Point_TOPODETAY)
+    update_cursor(KUCUKBINA, field3, Point_name)
 
-# ------------------------------------------------------------------------------------------------
-def Hausdorff_Analysis_Centroid(Input1,Input2):
-    cursors1 = []
-    cursors3 = []
-    fields_OSM = ["OID@", "SHAPE@", "SHAPE@TRUECENTROID","name"]
-    with arcpy.da.SearchCursor(Input1, fields_OSM) as cursor:
-        for row in cursor:
-            cursors1.append(row)
-            cursors3.append(row)
-    cursors2 = []
-    fields_reference = ["OID@", "SHAPE@","TOPODETAYA"]
-    with arcpy.da.SearchCursor(Input2,fields_reference ) as cursor2:
-        for rows in cursor2:
-            cursors2.append(rows)
-    errors = 0
-    hausdorff_list = []
-    TOPODETAY_list = []
-    OSM_list = []
     Non_Overlap_OSM_Attribute = []
-    for row in cursors1:
+    Non_Overlap_list = []
+
+    for i in cursor_osm:
         try:
-            distance = 10000000
-            polygon1 = row[1]
-            o = row[2][0]
-            k = row[2][1]
-            point = arcpy.Point(o, k)
-            Matching = False
-            for rows in cursors2:
-                polygon2 = rows[1]
-                if polygon2.contains(point):
-                    Matching = True
-                    result = Hausdorff_dist(polygon_vertices(row[1]), polygon_vertices(rows[1]))
-                    if distance > result:
-                        distance = result
-                        topodetay = rows[2]
-                        osm_name = row[3]
-                    break
-            if Matching is True:
-                hausdorff_list.append(distance)
-                insert_cursor(overlapping_features,polygon1)
-                TOPODETAY_list.append(topodetay)
-                OSM_list.append(osm_name)
-                cursors3.remove(row)
-        except:
-            errors +=1
-    update_cursor(overlapping_features, field, hausdorff_list)
-    update_cursor(overlapping_features, field2, TOPODETAY_list)
-    update_cursor(overlapping_features, field3, OSM_list)
-    for i in cursors3:
-        try:
-            insert_cursor(Non_Overlap,i[1])
-            Non_Overlap_OSM_Attribute.append(i[3])
-        except:
-            errors +=1
-    update_cursor(Non_Overlap, field3, Non_Overlap_OSM_Attribute)
-# ------------------------------------------------------------------------------------------------
-def Hausdorff_Analysis_Overlap(Input1,Input2):
-    cursors1 = []
-    cursors3 = []
-    field_OSM = ["OID@", "SHAPE@","name"]
-    with arcpy.da.SearchCursor(Input1, field_OSM) as cursor:
-        for row in cursor:
-            cursors1.append(row)
-            cursors3.append(row)
-    cursors2 = []
-    field_reference = ["OID@", "SHAPE@","TOPODETAYA"]
-    with arcpy.da.SearchCursor(Input2, field_reference) as cursor2:
-        for rows in cursor2:
-            cursors2.append(rows)
-    errors = 0
-    hausdorff_list = []
-    TOPODETAY_list = []
-    OSM_list = []
-    Non_Overlap_OSM_Attribute = []
-    for row in cursors1:
-        try:
-            distance = 1000000
-            polygon1 = row[1]
-            Matching = False
-            for rows in cursors2:
-                polygon2 = rows[1]
-                if polygon1.overlaps(polygon2):
-                    Matching = True
-                    result = Hausdorff_dist(polygon_vertices(row[1]), polygon_vertices(rows[1]))
-                    if distance > result:
-                        distance = result
-                        topodetay = rows[2]
-                        osm_name = row[2]
-            if Matching is True:
-                hausdorff_list.append(distance)
-                insert_cursor(overlapping_features, polygon1)
-                TOPODETAY_list.append(topodetay)
-                OSM_list.append(osm_name)
-                cursors3.remove(row)
-        except:
-            errors +=1
-        del row
-    update_cursor(overlapping_features, field, hausdorff_list)
-    update_cursor(overlapping_features, field2, TOPODETAY_list)
-    update_cursor(overlapping_features, field3, OSM_list)
-    for i in cursors3:
-        try:
-            insert_cursor(Non_Overlap,i[1])
+            Non_Overlap_list.append(i[1])
             Non_Overlap_OSM_Attribute.append(i[2])
         except:
             errors +=1
+    insert_cursor(KUCUKBINA_Non_Overlaps, Non_Overlap_list)
+    update_cursor(KUCUKBINA_Non_Overlaps, field3, Non_Overlap_OSM_Attribute)
+# ------------------------------------------------------------------------------------------------
+def Hausdorff_Analysis_Centroid(Input1,Input2,Threshold):
+    fields_OSM = ["OID@","SHAPE@", "SHAPE@TRUECENTROID", "name"]
+    cursors1 = [cursor for cursor in arcpy.da.SearchCursor(Input2, fields_OSM)]
+    fields_reference = ["OID@","SHAPE@", "TOPODETAYA","SHAPE@TRUECENTROID"]
+    cursors2 = [cursor for cursor in arcpy.da.SearchCursor(Input1,fields_reference )]
+    errors = 0
+    hausdorff_list = []
+    TOPODETAY_list = []
+    OSM_list = []
+    Non_Overlap_OSM_Attribute = []
+    polygon_list = []
+    Non_Overlap_list = []
+    for topovt in cursors2:
+        try:
+            for osm in cursors1:
+                dist = math.sqrt((topovt[3][0] - osm[2][0]) ** 2 + (topovt[3][1] - osm[2][1]) ** 2)
+                if dist < int(Threshold):
+                    point = arcpy.Point(osm[2][0], osm[2][1])
+                    if topovt[1].contains(point):
+                        result = Hausdorff_dist(polygon_vertices(osm[1]), polygon_vertices(topovt[1]))
+                        hausdorff_list.append(result)
+                        TOPODETAY_list.append(topovt[2])
+                        OSM_list.append(osm[3])
+                        polygon_list.append(osm[1])
+                        cursors1.remove(osm)
+                        break
+        except:
+            errors +=1
+    insert_cursor(overlapping_features, polygon_list)
+    update_cursor(overlapping_features, field, hausdorff_list)
+    update_cursor(overlapping_features, field2, TOPODETAY_list)
+    update_cursor(overlapping_features, field3, OSM_list)
+
+    for i in cursors1:
+        try:
+            Non_Overlap_list.append(i[1])
+            Non_Overlap_OSM_Attribute.append(i[3])
+        except:
+            errors +=1
+    insert_cursor(Non_Overlap, Non_Overlap_list)
+    update_cursor(Non_Overlap, field3, Non_Overlap_OSM_Attribute)
+
+# ------------------------------------------------------------------------------------------------
+def Hausdorff_Analysis_Overlap(Input1,Input2,Threshold):
+    fields_OSM = ["OID@", "SHAPE@",  "name","SHAPE@TRUECENTROID"]
+    cursors1 = [ cursor for cursor in arcpy.da.SearchCursor(Input2, fields_OSM)]
+    fields_reference = ["OID@", "SHAPE@", "TOPODETAYA","SHAPE@TRUECENTROID"]
+    cursors2 = [cursor for cursor in arcpy.da.SearchCursor(Input1,fields_reference )]
+    errors = 0
+    # ----------------------------------------------------------
+    hausdorff_list = []
+    TOPODETAY_list = []
+    OSM_list = []
+    Non_Overlap_OSM_Attribute = []
+    Non_Overlap_list = []
+    polygon_list = []
+    for topovt in cursors2:
+        try:
+            distance = 1000000
+            Matching = False
+            for osm in cursors1:
+                dist = math.sqrt((osm[3][0] - topovt[3][0]) ** 2 + (osm[3][1] - topovt[3][1]) ** 2)
+                if dist < int(Threshold):
+                    if osm[1].overlaps(topovt[1]):
+                        Matching = True
+                        result = Hausdorff_dist(polygon_vertices(osm[1]), polygon_vertices(topovt[1]))
+                        if distance > result:
+                            distance = result
+                            topodetay = topovt[2]
+                            osm_name = osm[2]
+                            cursors1.remove(osm)
+            if Matching is True:
+                hausdorff_list.append(distance)
+                polygon_list.append(topovt[1])
+                TOPODETAY_list.append(topodetay)
+                OSM_list.append(osm_name)
+        except:
+            errors +=1
+
+    insert_cursor(overlapping_features, polygon_list)
+    update_cursor(overlapping_features, field, hausdorff_list)
+    update_cursor(overlapping_features, field2, TOPODETAY_list)
+    update_cursor(overlapping_features, field3, OSM_list)
+    for i in cursors1:
+        try:
+            Non_Overlap_list.append(i[1])
+            Non_Overlap_OSM_Attribute.append(i[2])
+        except:
+            errors +=1
+    insert_cursor(Non_Overlap, Non_Overlap_list)
     update_cursor(Non_Overlap, field3, Non_Overlap_OSM_Attribute)
 # Poligon kesişimlerini kontrol eden ve kesişim varsa gerekli fonksiyonların çalışmasını sağlar
 # ------------------------------------------------------------------------------------------------
 if Choice == "Hausdorff Analysis With Centroid Method":
-    Hausdorff_Analysis_Centroid(Input1, Input2)
+    arcpy.CreateFeatureclass_management(directory, new_shapefile, feature_type)
+    arcpy.CreateFeatureclass_management(directory, new_shapefile2, feature_type)
+    arcpy.AddField_management(overlapping_features, field, field_type)
+    arcpy.AddField_management(overlapping_features, field2, field_type2)
+    arcpy.AddField_management(overlapping_features, field3, field_type2)
+    arcpy.AddField_management(Non_Overlap, field3, field_type2)
+    arcpy.DefineProjection_management(overlapping_features, coord_sys_topovt)
+    arcpy.DefineProjection_management(Non_Overlap, coord_sys_topovt)
+    Hausdorff_Analysis_Centroid(Input1, Input2,Threshold)
+    mxd = arcpy.mapping.MapDocument("CURRENT")
+    df = arcpy.mapping.ListDataFrames(mxd, "*")[0]
+    newlayer = arcpy.mapping.Layer(overlapping_features)
+    newlayer2 = arcpy.mapping.Layer(Non_Overlap)
+    arcpy.mapping.AddLayer(df, newlayer, "BOTTOM")
+    arcpy.mapping.AddLayer(df, newlayer2, "BOTTOM")
 elif Choice == "Hausdorff Analysis With Overlap Method":
-    Hausdorff_Analysis_Overlap(Input1,Input2)
+    arcpy.CreateFeatureclass_management(directory, new_shapefile, feature_type)
+    arcpy.CreateFeatureclass_management(directory, new_shapefile2, feature_type)
+    arcpy.AddField_management(overlapping_features, field, field_type)
+    arcpy.AddField_management(overlapping_features, field2, field_type2)
+    arcpy.AddField_management(overlapping_features, field3, field_type2)
+    arcpy.AddField_management(Non_Overlap, field3, field_type2)
+    arcpy.DefineProjection_management(overlapping_features, coord_sys_topovt)
+    arcpy.DefineProjection_management(Non_Overlap, coord_sys_topovt)
+    Hausdorff_Analysis_Overlap(Input1,Input2,Threshold)
+    mxd = arcpy.mapping.MapDocument("CURRENT")
+    df = arcpy.mapping.ListDataFrames(mxd, "*")[0]
+    newlayer = arcpy.mapping.Layer(overlapping_features)
+    newlayer2 = arcpy.mapping.Layer(Non_Overlap)
+    arcpy.mapping.AddLayer(df, newlayer, "BOTTOM")
+    arcpy.mapping.AddLayer(df, newlayer2, "BOTTOM")
+elif Choice == "KUCUKBINA Analizi":
+    arcpy.CreateFeatureclass_management(directory, new_shapefile3, feature_type)
+    arcpy.CreateFeatureclass_management(directory, new_shapefile4, feature_type)
+    arcpy.AddField_management(KUCUKBINA, field2, field_type2)
+    arcpy.AddField_management(KUCUKBINA, field3, field_type2)
+    arcpy.AddField_management(KUCUKBINA_Non_Overlaps, field3, field_type2)
+    arcpy.DefineProjection_management(KUCUKBINA, coord_sys_topovt)
+    arcpy.DefineProjection_management(KUCUKBINA_Non_Overlaps, coord_sys_topovt)
+    KUCUKBINA_Analysis(Input1,Input2,Threshold)
+    mxd = arcpy.mapping.MapDocument("CURRENT")
+    df = arcpy.mapping.ListDataFrames(mxd,"*")[0]
+    newlayer3 = arcpy.mapping.Layer(KUCUKBINA)
+    newlayer2 = arcpy.mapping.Layer(KUCUKBINA_Non_Overlaps)
+    arcpy.mapping.AddLayer(df, newlayer2, "BOTTOM")
+    arcpy.mapping.AddLayer(df, newlayer3,"BOTTOM")
 # ------------------------------------------------------------------------------------------------
-# get the map document
-mxd = arcpy.mapping.MapDocument("CURRENT")
-
-# get the data frame
-df = arcpy.mapping.ListDataFrames(mxd,"*")[0]
-
-# create a new layer
-newlayer = arcpy.mapping.Layer(overlapping_features)
-newlayer2 = arcpy.mapping.Layer(Non_Overlap)
-# add the layer to the map at the bottom of the TOC in data frame 0
-arcpy.mapping.AddLayer(df, newlayer,"BOTTOM")
-arcpy.mapping.AddLayer(df, newlayer2,"BOTTOM")
