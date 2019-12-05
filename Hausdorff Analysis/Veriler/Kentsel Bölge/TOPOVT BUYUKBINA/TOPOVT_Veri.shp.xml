@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata xml:lang="tr"><Esri><CreaDate>20190411</CreaDate><CreaTime>11272400</CreaTime><ArcGISFormat>1.0</ArcGISFormat><SyncOnce>TRUE</SyncOnce><DataProperties><lineage><Process ToolSource="c:\program files (x86)\arcgis\desktop10.3\ArcToolbox\Toolboxes\Data Management Tools.tbx\AddField" Date="20190620" Time="140205">AddField TOPOVT_Veri Shape_area DOUBLE # # # # NULLABLE NON_REQUIRED #</Process></lineage></DataProperties></Esri></metadata>
